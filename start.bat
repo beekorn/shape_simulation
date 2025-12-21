@@ -1,0 +1,3 @@
+@echo off
+echo Starting shape_simulation...
+start "" chrome index.html

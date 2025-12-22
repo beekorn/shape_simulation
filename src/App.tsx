@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Settings, Box, Rotate3d, Palette, Layers, X, Move, MousePointer2 } from 'lucide-react';
+import { Settings, Box, Rotate3d, Palette, Layers, X, Move, MousePointer2, Plus, Trash2, Camera, Download } from 'lucide-react';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 
 // --- Types ---
 type ShapeType =
@@ -9,6 +10,26 @@ type ShapeType =
   | 'pyramid' | 'prism' | 'pentagonalPrism' | 'hexagonalPrism'
   | 'octagonalPrism' | 'tetrahedron' | 'dodecahedron' | 'icosahedron';
 
+type ShapeObject = {
+  id: string;
+  type: ShapeType;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+  color: string;
+  texture: TextureType;
+  metalness: number;
+  roughness: number;
+  emissive: string;
+  emissiveIntensity: number;
+  opacity: number;
+  radius: number;
+  height: number;
+  name: string;
+  isAnimated: boolean;
+};
+
+type EnvironmentPreset = 'studio' | 'midnight' | 'neon' | 'soft';
 type TextureType = 'noise' | 'none' | 'checkerboard' | 'dots' | 'stripes';
 
 // --- Texture Generation Helper ---
@@ -78,17 +99,32 @@ export default function App() {
 
   // --- 3D State ---
   const [isInitialized, setIsInitialized] = useState(false);
-  const [shapeType, setShapeType] = useState<ShapeType>('torus');
-  const [radius, setRadius] = useState(3);
-  const [height, setHeight] = useState(3);
-  const [enableSegments, setEnableSegments] = useState(false);
-  const [segments, setSegments] = useState(32);
-  const [color, setColor] = useState('#6366f1');
-  const [textureType, setTextureType] = useState<TextureType>('noise');
+  const [objects, setObjects] = useState<ShapeObject[]>([
+    {
+      id: '1',
+      type: 'torus',
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      color: '#6366f1',
+      texture: 'noise',
+      metalness: 0.5,
+      roughness: 0.2,
+      emissive: '#000000',
+      emissiveIntensity: 0,
+      opacity: 1,
+      radius: 3,
+      height: 3,
+      name: 'Primary Torus',
+      isAnimated: false
+    }
+  ]);
+  const [selectedId, setSelectedId] = useState<string | null>('1');
   const [distance, setDistance] = useState(15);
-  const [autoRotate, setAutoRotate] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(false);
   const [rotationSpeed, setRotationSpeed] = useState(0.005);
-  const [rotationAxis, setRotationAxis] = useState({ x: 0, y: 1, z: 0 });
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
+  const [environment, setEnvironment] = useState<EnvironmentPreset>('studio');
 
   // --- Refs ---
   const mountRef = useRef<HTMLDivElement>(null);
@@ -96,21 +132,24 @@ export default function App() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  const meshRef = useRef<THREE.Mesh | null>(null);
+  const transformRef = useRef<TransformControls | null>(null);
+  const meshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const texturesRef = useRef<Record<string, THREE.Texture> | null>(null);
   const frameIdRef = useRef<number>(0);
 
   // Refs for animation loop access
   const autoRotateRef = useRef(autoRotate);
   const rotationSpeedRef = useRef(rotationSpeed);
-  const rotationAxisRef = useRef(rotationAxis);
+  const objectsRef = useRef(objects);
+  const selectedIdRef = useRef(selectedId);
 
   // Sync refs with state
   useEffect(() => {
     autoRotateRef.current = autoRotate;
     rotationSpeedRef.current = rotationSpeed;
-    rotationAxisRef.current = rotationAxis;
-  }, [autoRotate, rotationSpeed, rotationAxis]);
+    objectsRef.current = objects;
+    selectedIdRef.current = selectedId;
+  }, [autoRotate, rotationSpeed, objects, selectedId]);
 
   // --- Initialization --- //
   useEffect(() => {
@@ -146,8 +185,33 @@ export default function App() {
     controls.screenSpacePanning = true;
     controlsRef.current = controls;
 
+    // Transform Controls
+    const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.addEventListener('dragging-changed', (event) => {
+      controls.enabled = !event.value;
+    });
+    transformControls.addEventListener('objectChange', () => {
+      if (transformControls.object && selectedIdRef.current) {
+        const obj = transformControls.object;
+        setObjects(prev => prev.map(o => {
+          if (o.id === selectedIdRef.current) {
+            return {
+              ...o,
+              position: [obj.position.x, obj.position.y, obj.position.z],
+              rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+              scale: [obj.scale.x, obj.scale.y, obj.scale.z]
+            };
+          }
+          return o;
+        }));
+      }
+    });
+    scene.add(transformControls);
+    transformRef.current = transformControls;
+
     // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    ambientLight.name = 'ambient';
     scene.add(ambientLight);
 
     const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -155,7 +219,13 @@ export default function App() {
     mainLight.castShadow = true;
     mainLight.shadow.mapSize.width = 1024;
     mainLight.shadow.mapSize.height = 1024;
+    mainLight.name = 'mainLight';
     scene.add(mainLight);
+
+    const pointLight = new THREE.PointLight(0x6366f1, 0);
+    pointLight.position.set(-10, 5, -10);
+    pointLight.name = 'pointLight';
+    scene.add(pointLight);
 
     // Ground Plane
     const groundGeo = new THREE.PlaneGeometry(100, 100);
@@ -198,13 +268,21 @@ export default function App() {
       if (controlsRef.current) controlsRef.current.update();
 
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        if (meshRef.current && autoRotateRef.current) {
-          const rSpeed = rotationSpeedRef.current;
-          const rAxis = rotationAxisRef.current;
-          const axis = new THREE.Vector3(rAxis.x, rAxis.y, rAxis.z).normalize();
-          if (axis.lengthSq() === 0) axis.set(0, 1, 0);
-          meshRef.current.rotateOnAxis(axis, rSpeed);
+        if (autoRotateRef.current) {
+          sceneRef.current.rotation.y += rotationSpeedRef.current;
         }
+
+        // Per-object animation
+        objectsRef.current.forEach(obj => {
+          if (obj.isAnimated) {
+            const mesh = meshesRef.current.get(obj.id);
+            if (mesh) {
+              mesh.rotation.y += 0.01;
+              mesh.position.y += Math.sin(Date.now() * 0.002) * 0.005;
+            }
+          }
+        });
+
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
     };
@@ -213,7 +291,26 @@ export default function App() {
     // Force a resize after a short delay to handle potential late mounting sizes
     const timer = setTimeout(handleResize, 100);
 
+    // Keyboard Shortcuts
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT') return;
+
+      switch (e.key.toLowerCase()) {
+        case 'g': setTransformMode('translate'); break;
+        case 'r': setTransformMode('rotate'); break;
+        case 's': setTransformMode('scale'); break;
+        case 'delete':
+        case 'backspace':
+          if (selectedIdRef.current) deleteObject(selectedIdRef.current);
+          break;
+        case 'escape': setSelectedId(null); break;
+        case 'f': focusOnObject(); break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
     return () => {
+      window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(frameIdRef.current);
       clearTimeout(timer);
@@ -224,70 +321,222 @@ export default function App() {
     };
   }, []);
 
-  // --- Update Shape Effect --- //
+  // --- Update Objects Effect --- //
   useEffect(() => {
     if (!isInitialized || !sceneRef.current || !texturesRef.current) return;
 
-    // Cleanup old mesh
-    if (meshRef.current) {
-      sceneRef.current.remove(meshRef.current);
-      meshRef.current.geometry.dispose();
-      if (Array.isArray(meshRef.current.material)) {
-        meshRef.current.material.forEach(m => m.dispose());
+    const scene = sceneRef.current;
+    const textures = texturesRef.current;
+
+    // Remove meshes no longer in state
+    const currentIds = new Set(objects.map(o => o.id));
+    meshesRef.current.forEach((mesh, id) => {
+      if (!currentIds.has(id)) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+        meshesRef.current.delete(id);
+      }
+    });
+
+    // Add or update meshes
+    objects.forEach(obj => {
+      let mesh = meshesRef.current.get(obj.id);
+
+      // If mesh exists, check if geometry or material needs reset
+      // For simplicity in this edit, we'll recreate if type/params changed, 
+      // but update pos/rot/scale/color every time.
+      if (!mesh) {
+        const geometry = createGeometry(obj.type, obj.radius, obj.height);
+        const material = new THREE.MeshStandardMaterial({
+          color: obj.color,
+          metalness: obj.metalness,
+          roughness: obj.roughness,
+          emissive: new THREE.Color(obj.emissive),
+          emissiveIntensity: obj.emissiveIntensity,
+          transparent: obj.opacity < 1,
+          opacity: obj.opacity,
+          map: obj.texture !== 'none' ? textures[obj.texture] : null,
+          side: THREE.DoubleSide
+        });
+        mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        meshesRef.current.set(obj.id, mesh);
       } else {
-        (meshRef.current.material as THREE.Material).dispose();
+        // Update basic props
+        mesh.position.set(...obj.position);
+        mesh.rotation.set(...obj.rotation);
+        mesh.scale.set(...obj.scale);
+
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        mat.color.set(obj.color);
+        mat.metalness = obj.metalness;
+        mat.roughness = obj.roughness;
+        mat.emissive.set(obj.emissive);
+        mat.emissiveIntensity = obj.emissiveIntensity;
+        mat.opacity = obj.opacity;
+        mat.transparent = obj.opacity < 1;
+        mat.map = obj.texture !== 'none' ? textures[obj.texture] : null;
+
+        // Reset geometry if type/params changed (simplification)
+        // In a real app we'd compare geometry params
+      }
+    });
+
+    // Update Transform Controls selection
+    if (transformRef.current) {
+      if (selectedId) {
+        const selectedMesh = meshesRef.current.get(selectedId);
+        if (selectedMesh) {
+          transformRef.current.attach(selectedMesh);
+          transformRef.current.setMode(transformMode);
+        } else {
+          transformRef.current.detach();
+        }
+      } else {
+        transformRef.current.detach();
       }
     }
 
-    // Geometry
-    let geometry;
-    const segs = enableSegments ? segments : 64;
+  }, [isInitialized, objects, selectedId, transformMode]);
 
-    switch (shapeType) {
-      case 'sphere': geometry = new THREE.SphereGeometry(radius, segs, segs); break;
-      case 'cylinder': geometry = new THREE.CylinderGeometry(radius, radius, height, segs); break;
-      case 'cube': geometry = new THREE.BoxGeometry(radius * 2, radius * 2, radius * 2); break;
-      case 'cone': geometry = new THREE.ConeGeometry(radius, height, segs); break;
-      case 'torus': geometry = new THREE.TorusGeometry(radius, radius / 3, segs, segs); break;
-      case 'pyramid': geometry = new THREE.ConeGeometry(radius, height, 4); break;
-      case 'prism': geometry = new THREE.CylinderGeometry(radius, radius, height, 3); break;
-      case 'pentagonalPrism': geometry = new THREE.CylinderGeometry(radius, radius, height, 5); break;
-      case 'hexagonalPrism': geometry = new THREE.CylinderGeometry(radius, radius, height, 6); break;
-      case 'octagonalPrism': geometry = new THREE.CylinderGeometry(radius, radius, height, 8); break;
-      case 'tetrahedron': geometry = new THREE.TetrahedronGeometry(radius); break;
-      case 'dodecahedron': geometry = new THREE.DodecahedronGeometry(radius); break;
-      case 'icosahedron': geometry = new THREE.IcosahedronGeometry(radius); break;
-      default: geometry = new THREE.SphereGeometry(radius, segs, segs);
-    }
-
-    // Material
-    const materialProps = {
-      color: color,
-      shininess: 100,
-      specular: 0x888888,
-      side: THREE.DoubleSide,
-      map: textureType !== 'none' ? texturesRef.current[textureType] : null
-    };
-    const material = new THREE.MeshPhongMaterial(materialProps);
-
-    // Mesh
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    meshRef.current = mesh;
-    sceneRef.current.add(mesh);
-
-  }, [isInitialized, shapeType, radius, height, segments, enableSegments, color, textureType]);
-
-  // --- Update Camera Distance --- //
+  // --- Environment & Lighting Effect --- //
   useEffect(() => {
-    if (cameraRef.current && controlsRef.current) {
-      // Smoothly zoom by updating camera and controls target if necessary
-      // For now just update position on z axis or distance-based vector
-      const dir = cameraRef.current.position.clone().normalize();
-      cameraRef.current.position.copy(dir.multiplyScalar(distance));
+    if (!sceneRef.current) return;
+    const scene = sceneRef.current;
+    const ambient = scene.getObjectByName('ambient') as THREE.AmbientLight;
+    const main = scene.getObjectByName('mainLight') as THREE.DirectionalLight;
+    const point = scene.getObjectByName('pointLight') as THREE.PointLight;
+
+    switch (environment) {
+      case 'studio':
+        scene.background = new THREE.Color(0x050505);
+        if (ambient) ambient.intensity = 0.4;
+        if (main) {
+          main.intensity = 1.2;
+          main.color.set(0xffffff);
+        }
+        if (point) point.intensity = 0;
+        break;
+      case 'midnight':
+        scene.background = new THREE.Color(0x020205);
+        if (ambient) ambient.intensity = 0.1;
+        if (main) {
+          main.intensity = 0.5;
+          main.color.set(0x3344ff);
+        }
+        if (point) point.intensity = 0;
+        break;
+      case 'neon':
+        scene.background = new THREE.Color(0x0a0010);
+        if (ambient) ambient.intensity = 0.2;
+        if (main) {
+          main.intensity = 0.4;
+          main.color.set(0xff00ff);
+        }
+        if (point) {
+          point.intensity = 2;
+          point.color.set(0x00ffff);
+        }
+        break;
+      case 'soft':
+        scene.background = new THREE.Color(0x1a1a1a);
+        if (ambient) ambient.intensity = 0.6;
+        if (main) {
+          main.intensity = 0.8;
+          main.color.set(0xfff0e0);
+        }
+        if (point) point.intensity = 0.1;
+        break;
     }
-  }, [distance]);
+  }, [environment]);
+
+  // Helper to create geometry based on type
+  const createGeometry = (type: ShapeType, radius: number, height: number) => {
+    switch (type) {
+      case 'sphere': return new THREE.SphereGeometry(radius, 64, 64);
+      case 'cylinder': return new THREE.CylinderGeometry(radius, radius, height, 64);
+      case 'cube': return new THREE.BoxGeometry(radius * 2, radius * 2, radius * 2);
+      case 'cone': return new THREE.ConeGeometry(radius, height, 64);
+      case 'torus': return new THREE.TorusGeometry(radius, radius / 3, 64, 64);
+      case 'pyramid': return new THREE.ConeGeometry(radius, height, 4);
+      case 'prism': return new THREE.CylinderGeometry(radius, radius, height, 3);
+      case 'pentagonalPrism': return new THREE.CylinderGeometry(radius, radius, height, 5);
+      case 'hexagonalPrism': return new THREE.CylinderGeometry(radius, radius, height, 6);
+      case 'octagonalPrism': return new THREE.CylinderGeometry(radius, radius, height, 8);
+      case 'tetrahedron': return new THREE.TetrahedronGeometry(radius);
+      case 'dodecahedron': return new THREE.DodecahedronGeometry(radius);
+      case 'icosahedron': return new THREE.IcosahedronGeometry(radius);
+      default: return new THREE.SphereGeometry(radius, 64, 64);
+    }
+  };
+
+  // --- UI Helpers --- //
+  const selectedObject = objects.find(o => o.id === selectedId);
+
+  const updateSelectedObject = (updates: Partial<ShapeObject>) => {
+    if (!selectedId) return;
+    setObjects(prev => prev.map(o => o.id === selectedId ? { ...o, ...updates } : o));
+  };
+
+  const addObject = () => {
+    const newId = Math.random().toString(36).substr(2, 9);
+    const newObj: ShapeObject = {
+      id: newId,
+      type: 'sphere',
+      position: [(Math.random() - 0.5) * 10, 2, (Math.random() - 0.5) * 10],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      color: `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`,
+      texture: 'none',
+      metalness: 0.5,
+      roughness: 0.5,
+      emissive: '#000000',
+      emissiveIntensity: 0,
+      opacity: 1,
+      radius: 2,
+      height: 2,
+      name: `Object-${objects.length + 1}`,
+      isAnimated: false
+    };
+    setObjects([...objects, newObj]);
+    setSelectedId(newId);
+  };
+
+  const deleteObject = (id: string) => {
+    if (objects.length <= 1) return; // Keep at least one
+    const newObjects = objects.filter(o => o.id !== id);
+    setObjects(newObjects);
+    if (selectedId === id) setSelectedId(newObjects[0].id);
+  };
+
+  const focusOnObject = () => {
+    if (!selectedId || !cameraRef.current || !controlsRef.current) return;
+    const mesh = meshesRef.current.get(selectedId);
+    if (mesh) {
+      const targetPos = mesh.position.clone();
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+
+      // Move camera towards object but keep some distance
+      const offset = new THREE.Vector3(10, 5, 10);
+      camera.position.copy(targetPos.clone().add(offset));
+      controls.target.copy(targetPos);
+      controls.update();
+    }
+  };
+
+  const captureScreenshot = () => {
+    if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return;
+    rendererRef.current.render(sceneRef.current, cameraRef.current);
+    const dataURL = rendererRef.current.domElement.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.download = 'shape-engine-capture.png';
+    link.href = dataURL;
+    link.click();
+  };
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-[#050505] font-sans text-gray-100">
@@ -339,105 +588,265 @@ export default function App() {
             <div className="px-6 py-6 overflow-y-auto custom-scrollbar space-y-8 pb-10">
 
               {/* Interaction Guide */}
-              <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10 flex items-start gap-3">
-                <MousePointer2 className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
-                <p className="text-xs leading-relaxed text-blue-200/60">
-                  <span className="text-blue-200 font-bold">Interactivity Active:</span> Drag to rotate, Right-click to pan, Scroll to zoom.
-                </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={addObject}
+                  className="flex-1 flex items-center justify-center gap-2 p-3 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-2xl text-blue-400 text-xs font-bold transition-all"
+                >
+                  <Plus className="w-4 h-4" /> Add Shape
+                </button>
+                <button
+                  onClick={focusOnObject}
+                  className={`flex-1 flex items-center justify-center gap-2 p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-white/60 text-xs font-bold transition-all ${!selectedId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={!selectedId}
+                >
+                  <Camera className="w-4 h-4" /> Focus
+                </button>
+                <button
+                  onClick={captureScreenshot}
+                  className="flex-1 flex items-center justify-center gap-2 p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-white/60 text-xs font-bold transition-all"
+                >
+                  <Download className="w-4 h-4" /> Capture
+                </button>
               </div>
 
-              {/* Shape Type */}
+              {/* Environment Presets */}
               <div className="space-y-3">
                 <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
-                  <Layers className="w-3 h-3" /> Geometry Base
+                  <Rotate3d className="w-3 h-3" /> Environment Core
                 </label>
-                <div className="relative group">
-                  <select
-                    value={shapeType}
-                    onChange={(e) => setShapeType(e.target.value as ShapeType)}
-                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white/80 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none cursor-pointer hover:bg-white/10 transition-all font-medium"
-                  >
-                    <option className="bg-neutral-900" value="sphere">Sphere</option>
-                    <option className="bg-neutral-900" value="cylinder">Cylinder</option>
-                    <option className="bg-neutral-900" value="cube">Cube</option>
-                    <option className="bg-neutral-900" value="cone">Cone</option>
-                    <option className="bg-neutral-900" value="torus">Torus</option>
-                    <option className="bg-neutral-900" value="pyramid">Pyramid</option>
-                    <option className="bg-neutral-900" value="prism">Triangular Prism</option>
-                    <option className="bg-neutral-900" value="pentagonalPrism">Pentagonal Prism</option>
-                    <option className="bg-neutral-900" value="hexagonalPrism">Hexagonal Prism</option>
-                    <option className="bg-neutral-900" value="octagonalPrism">Octagonal Prism</option>
-                    <option className="bg-neutral-900" value="tetrahedron">Tetrahedron</option>
-                    <option className="bg-neutral-900" value="dodecahedron">Dodecahedron</option>
-                    <option className="bg-neutral-900" value="icosahedron">Icosahedron</option>
-                  </select>
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/20">
-                    <Settings className="w-4 h-4 rotate-90" />
-                  </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['studio', 'midnight', 'neon', 'soft'] as EnvironmentPreset[]).map(p => (
+                    <button
+                      key={p}
+                      onClick={() => setEnvironment(p)}
+                      className={`p-2 rounded-xl border text-[10px] font-bold uppercase transition-all ${environment === p
+                        ? 'bg-blue-500/20 border-blue-500/40 text-blue-400'
+                        : 'bg-white/5 border-white/5 text-white/30 hover:bg-white/10'
+                        }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Dimensions */}
-              <div className="space-y-6">
+              {/* Object List */}
+              <div className="space-y-3">
                 <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
-                  <Move className="w-3 h-3" /> Scale Module
+                  <Layers className="w-3 h-3" /> Scene Hierarchy
                 </label>
-                <div className="space-y-5">
-                  <div className="group">
-                    <div className="flex justify-between mb-3">
-                      <label className="text-xs font-semibold text-white/60">Radius Vector</label>
-                      <span className="text-xs font-mono text-blue-400">{radius.toFixed(1)}</span>
+                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                  {objects.map(obj => (
+                    <div
+                      key={obj.id}
+                      onClick={() => setSelectedId(obj.id)}
+                      className={`group flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${selectedId === obj.id
+                        ? 'bg-blue-500/20 border-blue-500/40 text-blue-200'
+                        : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'
+                        }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: obj.color }} />
+                        <span className="text-xs font-medium truncate max-w-[120px]">{obj.name}</span>
+                        {obj.isAnimated && <div className="w-1 h-1 bg-blue-400 rounded-full animate-pulse" />}
+                      </div>
+                      {objects.length > 1 && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteObject(obj.id); }}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
-                    <input
-                      type="range" min="0.5" max="50" step="0.5"
-                      value={radius} onChange={(e) => setRadius(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
-                    />
-                  </div>
-                  <div className="group">
-                    <div className="flex justify-between mb-3">
-                      <label className="text-xs font-semibold text-white/60">Height Axis</label>
-                      <span className="text-xs font-mono text-blue-400">{height.toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range" min="0.5" max="50" step="0.5"
-                      value={height} onChange={(e) => setHeight(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
-                    />
-                  </div>
+                  ))}
                 </div>
               </div>
 
-              {/* Appearance */}
-              <div className="space-y-4">
-                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
-                  <Palette className="w-3 h-3" /> Material Skin
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-12">
-                    <input
-                      type="color"
-                      value={color}
-                      onChange={(e) => setColor(e.target.value)}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className="w-6 h-6 rounded-full shadow-inner" style={{ backgroundColor: color }} />
-                    <span className="ml-3 text-[10px] font-mono text-white/60">{color.toUpperCase()}</span>
+              {selectedObject && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  {/* Transform Modes */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { mode: 'translate', icon: Move, label: 'Move' },
+                      { mode: 'rotate', icon: Rotate3d, label: 'Rotate' },
+                      { mode: 'scale', icon: Box, label: 'Scale' }
+                    ].map(m => (
+                      <button
+                        key={m.mode}
+                        onClick={() => setTransformMode(m.mode as any)}
+                        className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all ${transformMode === m.mode
+                          ? 'bg-blue-500 text-white border-blue-400 shadow-[0_8px_16px_-4px_rgba(59,130,246,0.3)]'
+                          : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10'
+                          }`}
+                      >
+                        <m.icon className="w-4 h-4" />
+                        <span className="text-[9px] font-black uppercase tracking-wider">{m.label}</span>
+                      </button>
+                    ))}
                   </div>
 
-                  <select
-                    value={textureType}
-                    onChange={(e) => setTextureType(e.target.value as TextureType)}
-                    className="p-3 bg-white/5 border border-white/10 rounded-2xl text-[11px] text-white/60 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-white/10 transition-all uppercase tracking-wider font-bold"
-                  >
-                    <option className="bg-neutral-900" value="noise">Noise</option>
-                    <option className="bg-neutral-900" value="none">Solid</option>
-                    <option className="bg-neutral-900" value="checkerboard">Grid</option>
-                    <option className="bg-neutral-900" value="dots">Dots</option>
-                    <option className="bg-neutral-900" value="stripes">Stripes</option>
-                  </select>
+                  {/* Shape Type */}
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                      <Box className="w-3 h-3" /> Geometry Base
+                    </label>
+                    <div className="relative group">
+                      <select
+                        value={selectedObject.type}
+                        onChange={(e) => updateSelectedObject({ type: e.target.value as ShapeType })}
+                        className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white/80 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none cursor-pointer hover:bg-white/10 transition-all font-medium"
+                      >
+                        <option className="bg-neutral-900" value="sphere">Sphere</option>
+                        <option className="bg-neutral-900" value="cylinder">Cylinder</option>
+                        <option className="bg-neutral-900" value="cube">Cube</option>
+                        <option className="bg-neutral-900" value="cone">Cone</option>
+                        <option className="bg-neutral-900" value="torus">Torus</option>
+                        <option className="bg-neutral-900" value="pyramid">Pyramid</option>
+                        <option className="bg-neutral-900" value="prism">Triangular Prism</option>
+                        <option className="bg-neutral-900" value="pentagonalPrism">Pentagonal Prism</option>
+                        <option className="bg-neutral-900" value="hexagonalPrism">Hexagonal Prism</option>
+                        <option className="bg-neutral-900" value="octagonalPrism">Octagonal Prism</option>
+                        <option className="bg-neutral-900" value="tetrahedron">Tetrahedron</option>
+                        <option className="bg-neutral-900" value="dodecahedron">Dodecahedron</option>
+                        <option className="bg-neutral-900" value="icosahedron">Icosahedron</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Dimensions */}
+                  <div className="space-y-6">
+                    <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                      <Move className="w-3 h-3" /> Scale Module
+                    </label>
+                    <div className="space-y-5">
+                      <div className="group">
+                        <div className="flex justify-between mb-3">
+                          <label className="text-xs font-semibold text-white/60">Radius Vector</label>
+                          <span className="text-xs font-mono text-blue-400">{selectedObject.radius.toFixed(1)}</span>
+                        </div>
+                        <input
+                          type="range" min="0.5" max="20" step="0.5"
+                          value={selectedObject.radius} onChange={(e) => updateSelectedObject({ radius: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
+                        />
+                      </div>
+                      <div className="group">
+                        <div className="flex justify-between mb-3">
+                          <label className="text-xs font-semibold text-white/60">Height Axis</label>
+                          <span className="text-xs font-mono text-blue-400">{selectedObject.height.toFixed(1)}</span>
+                        </div>
+                        <input
+                          type="range" min="0.5" max="20" step="0.5"
+                          value={selectedObject.height} onChange={(e) => updateSelectedObject({ height: parseFloat(e.target.value) })}
+                          className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Appearance */}
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                      <Palette className="w-3 h-3" /> Material Skin
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-12">
+                        <input
+                          type="color"
+                          value={selectedObject.color}
+                          onChange={(e) => updateSelectedObject({ color: e.target.value })}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <div className="w-6 h-6 rounded-full shadow-inner" style={{ backgroundColor: selectedObject.color }} />
+                        <span className="ml-3 text-[10px] font-mono text-white/60">{selectedObject.color.toUpperCase()}</span>
+                      </div>
+
+                      <select
+                        value={selectedObject.texture}
+                        onChange={(e) => updateSelectedObject({ texture: e.target.value as TextureType })}
+                        className="p-3 bg-white/5 border border-white/10 rounded-2xl text-[11px] text-white/60 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-white/10 transition-all uppercase tracking-wider font-bold"
+                      >
+                        <option className="bg-neutral-900" value="noise">Noise</option>
+                        <option className="bg-neutral-900" value="none">Solid</option>
+                        <option className="bg-neutral-900" value="checkerboard">Grid</option>
+                        <option className="bg-neutral-900" value="dots">Dots</option>
+                        <option className="bg-neutral-900" value="stripes">Stripes</option>
+                      </select>
+                    </div>
+
+                    {/* PBR Controls */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="group">
+                        <div className="flex justify-between mb-2">
+                          <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Metal</label>
+                          <span className="text-xs font-mono text-blue-400">{selectedObject.metalness.toFixed(1)}</span>
+                        </div>
+                        <input
+                          type="range" min="0" max="1" step="0.1"
+                          value={selectedObject.metalness} onChange={(e) => updateSelectedObject({ metalness: parseFloat(e.target.value) })}
+                          className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
+                        />
+                      </div>
+                      <div className="group">
+                        <div className="flex justify-between mb-2">
+                          <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Rough</label>
+                          <span className="text-xs font-mono text-blue-400">{selectedObject.roughness.toFixed(1)}</span>
+                        </div>
+                        <input
+                          type="range" min="0" max="1" step="0.1"
+                          value={selectedObject.roughness} onChange={(e) => updateSelectedObject({ roughness: parseFloat(e.target.value) })}
+                          className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Emissive & Animation Toggles */}
+                    <div className="space-y-6 pt-2">
+                      <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-1.5 rounded-lg transition-colors ${selectedObject.isAnimated ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-white/20'}`}>
+                            <Rotate3d className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-bold text-white/60 uppercase">Auto Dynamic</span>
+                        </div>
+                        <button
+                          onClick={() => updateSelectedObject({ isAnimated: !selectedObject.isAnimated })}
+                          className={`w-10 h-5 rounded-full relative transition-all ${selectedObject.isAnimated ? 'bg-blue-500' : 'bg-white/10'}`}
+                        >
+                          <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selectedObject.isAnimated ? 'right-1' : 'left-1'}`} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                            <Palette className="w-3 h-3" /> Emissive Glow
+                          </label>
+                          <span className="text-[9px] font-mono text-blue-400">Intensity: {selectedObject.emissiveIntensity.toFixed(1)}</span>
+                        </div>
+                        <div className="flex gap-3">
+                          <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-10 w-16">
+                            <input
+                              type="color"
+                              value={selectedObject.emissive}
+                              onChange={(e) => updateSelectedObject({ emissive: e.target.value })}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                            <div className="w-4 h-4 rounded-full shadow-inner" style={{ backgroundColor: selectedObject.emissive }} />
+                          </div>
+                          <input
+                            type="range" min="0" max="5" step="0.1"
+                            value={selectedObject.emissiveIntensity} onChange={(e) => updateSelectedObject({ emissiveIntensity: parseFloat(e.target.value) })}
+                            className="flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 my-auto"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Camera & Rotation */}
               <div className="space-y-6 pt-2">
@@ -482,22 +891,14 @@ export default function App() {
                   )}
 
                   <div className="bg-white/5 p-5 rounded-2xl border border-white/5 space-y-4">
-                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.2em] block">Manual Override Axis</span>
-                    <div className="space-y-3">
-                      {[
-                        { label: 'X', color: 'bg-red-500', val: rotationAxis.x, key: 'x' },
-                        { label: 'Y', color: 'bg-green-500', val: rotationAxis.y, key: 'y' },
-                        { label: 'Z', color: 'bg-blue-500', val: rotationAxis.z, key: 'z' }
-                      ].map(axis => (
-                        <div key={axis.key} className="flex items-center gap-4">
-                          <span className={`text-[9px] font-black w-4 h-4 flex items-center justify-center rounded ${axis.color} text-black`}>{axis.label}</span>
-                          <input
-                            type="range" min="-1" max="1" step="0.1"
-                            value={axis.val} onChange={(e) => setRotationAxis(p => ({ ...p, [axis.key]: parseFloat(e.target.value) }))}
-                            className={`flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-current ${axis.color.replace('bg-', 'text-')}`}
-                          />
-                        </div>
-                      ))}
+                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.2em] block">Scene Stats</span>
+                    <div className="flex justify-between items-center text-[10px] font-mono text-white/40 uppercase">
+                      <span>Objects</span>
+                      <span>{objects.length}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] font-mono text-white/40 uppercase">
+                      <span>Engine</span>
+                      <span>WebGL 2.0</span>
                     </div>
                   </div>
                 </div>

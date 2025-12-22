@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Settings, Box, Rotate3d, Palette, Layers, X, Move, MousePointer2 } from 'lucide-react';
 
 // --- Types ---

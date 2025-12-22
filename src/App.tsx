@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Settings, Box, Rotate3d, Palette, Layers, X } from 'lucide-react';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { Settings, Box, Rotate3d, Palette, Layers, X, Move, MousePointer2 } from 'lucide-react';
 
 // --- Types ---
-type ShapeType = 
-  | 'sphere' | 'cylinder' | 'cube' | 'cone' | 'torus' 
-  | 'pyramid' | 'prism' | 'pentagonalPrism' | 'hexagonalPrism' 
+type ShapeType =
+  | 'sphere' | 'cylinder' | 'cube' | 'cone' | 'torus'
+  | 'pyramid' | 'prism' | 'pentagonalPrism' | 'hexagonalPrism'
   | 'octagonalPrism' | 'tetrahedron' | 'dodecahedron' | 'icosahedron';
 
 type TextureType = 'noise' | 'none' | 'checkerboard' | 'dots' | 'stripes';
@@ -22,7 +23,7 @@ const createTextures = () => {
   const ctxChecker = checkerboardCanvas.getContext('2d')!;
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
-      ctxChecker.fillStyle = (x + y) % 2 === 0 ? 'white' : 'black';
+      ctxChecker.fillStyle = (x + y) % 2 === 0 ? '#ffffff' : '#111111';
       ctxChecker.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
     }
   }
@@ -32,9 +33,9 @@ const createTextures = () => {
   const dotsCanvas = document.createElement('canvas');
   dotsCanvas.width = dotsCanvas.height = textureSize;
   const ctxDots = dotsCanvas.getContext('2d')!;
-  ctxDots.fillStyle = 'white';
+  ctxDots.fillStyle = '#111111';
   ctxDots.fillRect(0, 0, textureSize, textureSize);
-  ctxDots.fillStyle = 'black';
+  ctxDots.fillStyle = '#ffffff';
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
       ctxDots.beginPath();
@@ -49,7 +50,7 @@ const createTextures = () => {
   stripesCanvas.width = stripesCanvas.height = textureSize;
   const ctxStripes = stripesCanvas.getContext('2d')!;
   for (let y = 0; y < textureSize; y += tileSize) {
-    ctxStripes.fillStyle = y % (tileSize * 2) === 0 ? 'white' : 'black';
+    ctxStripes.fillStyle = y % (tileSize * 2) === 0 ? '#ffffff' : '#111111';
     ctxStripes.fillRect(0, y, textureSize, tileSize);
   }
   textures.stripes = new THREE.CanvasTexture(stripesCanvas);
@@ -73,18 +74,20 @@ const createTextures = () => {
 
 export default function App() {
   // --- UI State ---
-  const [isSettingsOpen, setIsSettingsOpen] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // --- 3D State ---
-  const [shapeType, setShapeType] = useState<ShapeType>('sphere');
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [shapeType, setShapeType] = useState<ShapeType>('torus');
   const [radius, setRadius] = useState(3);
   const [height, setHeight] = useState(3);
   const [enableSegments, setEnableSegments] = useState(false);
   const [segments, setSegments] = useState(32);
-  const [color, setColor] = useState('#3b82f6');
+  const [color, setColor] = useState('#6366f1');
   const [textureType, setTextureType] = useState<TextureType>('noise');
-  const [distance, setDistance] = useState(10);
-  const [rotationSpeed, setRotationSpeed] = useState(0.01);
+  const [distance, setDistance] = useState(15);
+  const [autoRotate, setAutoRotate] = useState(true);
+  const [rotationSpeed, setRotationSpeed] = useState(0.005);
   const [rotationAxis, setRotationAxis] = useState({ x: 0, y: 1, z: 0 });
 
   // --- Refs ---
@@ -92,19 +95,22 @@ export default function App() {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
   const meshRef = useRef<THREE.Mesh | null>(null);
   const texturesRef = useRef<Record<string, THREE.Texture> | null>(null);
   const frameIdRef = useRef<number>(0);
 
   // Refs for animation loop access
+  const autoRotateRef = useRef(autoRotate);
   const rotationSpeedRef = useRef(rotationSpeed);
   const rotationAxisRef = useRef(rotationAxis);
 
   // Sync refs with state
   useEffect(() => {
+    autoRotateRef.current = autoRotate;
     rotationSpeedRef.current = rotationSpeed;
     rotationAxisRef.current = rotationAxis;
-  }, [rotationSpeed, rotationAxis]);
+  }, [autoRotate, rotationSpeed, rotationAxis]);
 
   // --- Initialization --- //
   useEffect(() => {
@@ -112,34 +118,68 @@ export default function App() {
 
     // Scene
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+    scene.fog = new THREE.Fog(0x050505, 10, 200);
     sceneRef.current = scene;
 
     // Camera
     const width = mountRef.current.clientWidth;
     const height = mountRef.current.clientHeight;
     const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    camera.position.z = distance;
+    camera.position.set(distance, distance * 0.5, distance);
     cameraRef.current = camera;
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
-    renderer.setClearColor(0x000000, 0); // Transparent background for overlay feel
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setClearColor(0x0a0a0a, 1);
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
+    // Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = true;
+    controlsRef.current = controls;
+
     // Lights
-    const ambientLight = new THREE.AmbientLight(0x404040);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
-    scene.add(directionalLight);
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    backLight.position.set(-5, -5, -5);
-    scene.add(backLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(10, 10, 10);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 1024;
+    mainLight.shadow.mapSize.height = 1024;
+    scene.add(mainLight);
+
+    // Ground Plane
+    const groundGeo = new THREE.PlaneGeometry(100, 100);
+    const groundMat = new THREE.MeshPhongMaterial({
+      color: 0x111111,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.2
+    });
+    const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.position.y = -5;
+    groundMesh.receiveShadow = true;
+    scene.add(groundMesh);
+
+    // Grid Helper
+    const grid = new THREE.GridHelper(100, 40, 0x444444, 0x222222);
+    grid.position.y = -4.99;
+    scene.add(grid);
 
     // Textures
     texturesRef.current = createTextures();
+
+    setIsInitialized(true);
 
     // Resize Handler
     const handleResize = () => {
@@ -155,22 +195,28 @@ export default function App() {
     // Animation Loop
     const animate = () => {
       frameIdRef.current = requestAnimationFrame(animate);
-      if (meshRef.current && rendererRef.current && sceneRef.current && cameraRef.current) {
-        const rSpeed = rotationSpeedRef.current;
-        const rAxis = rotationAxisRef.current;
-        
-        const axis = new THREE.Vector3(rAxis.x, rAxis.y, rAxis.z).normalize();
-        if (axis.lengthSq() === 0) axis.set(0, 1, 0);
-        
-        meshRef.current.rotateOnAxis(axis, rSpeed);
+      if (controlsRef.current) controlsRef.current.update();
+
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        if (meshRef.current && autoRotateRef.current) {
+          const rSpeed = rotationSpeedRef.current;
+          const rAxis = rotationAxisRef.current;
+          const axis = new THREE.Vector3(rAxis.x, rAxis.y, rAxis.z).normalize();
+          if (axis.lengthSq() === 0) axis.set(0, 1, 0);
+          meshRef.current.rotateOnAxis(axis, rSpeed);
+        }
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
     };
     animate();
 
+    // Force a resize after a short delay to handle potential late mounting sizes
+    const timer = setTimeout(handleResize, 100);
+
     return () => {
       window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(frameIdRef.current);
+      clearTimeout(timer);
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
       }
@@ -180,7 +226,7 @@ export default function App() {
 
   // --- Update Shape Effect --- //
   useEffect(() => {
-    if (!sceneRef.current || !texturesRef.current) return;
+    if (!isInitialized || !sceneRef.current || !texturesRef.current) return;
 
     // Cleanup old mesh
     if (meshRef.current) {
@@ -217,8 +263,8 @@ export default function App() {
     // Material
     const materialProps = {
       color: color,
-      shininess: 150,
-      specular: 0x444444,
+      shininess: 100,
+      specular: 0x888888,
       side: THREE.DoubleSide,
       map: textureType !== 'none' ? texturesRef.current[textureType] : null
     };
@@ -226,229 +272,232 @@ export default function App() {
 
     // Mesh
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     meshRef.current = mesh;
     sceneRef.current.add(mesh);
 
-  }, [shapeType, radius, height, segments, enableSegments, color, textureType]);
+  }, [isInitialized, shapeType, radius, height, segments, enableSegments, color, textureType]);
 
   // --- Update Camera Distance --- //
   useEffect(() => {
-    if (cameraRef.current) {
-      cameraRef.current.position.z = distance;
+    if (cameraRef.current && controlsRef.current) {
+      // Smoothly zoom by updating camera and controls target if necessary
+      // For now just update position on z axis or distance-based vector
+      const dir = cameraRef.current.position.clone().normalize();
+      cameraRef.current.position.copy(dir.multiplyScalar(distance));
     }
   }, [distance]);
 
   return (
-    <div className="relative h-screen w-full overflow-hidden bg-gray-100 font-sans">
-      
+    <div className="relative h-screen w-full overflow-hidden bg-[#050505] font-sans text-gray-100">
+
       {/* Full Screen 3D Viewport */}
-      <div ref={mountRef} className="absolute inset-0 z-0 bg-gradient-to-br from-gray-100 to-gray-300" />
+      <div ref={mountRef} className="absolute inset-0 z-0" />
 
       {/* Floating Settings Panel */}
-      <div 
-        className={`absolute top-4 left-4 z-10 transition-all duration-300 ease-in-out ${
-          isSettingsOpen 
-            ? 'w-80 bg-white/30 backdrop-blur-xl shadow-2xl rounded-xl border border-white/40'
-            : 'w-12 h-12 bg-white/50 backdrop-blur-md shadow-lg rounded-full hover:scale-110 cursor-pointer border border-white/40'
-        }`}
+      <div
+        className={`fixed top-6 left-6 z-10 transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${isSettingsOpen
+          ? 'w-[340px] bg-black/40 backdrop-blur-2xl shadow-[0_32px_64px_-16px_rgba(0,0,0,0.6)] rounded-[24px] border border-white/10'
+          : 'w-14 h-14 bg-white/10 backdrop-blur-md shadow-lg rounded-full hover:scale-110 cursor-pointer border border-white/10 group'
+          }`}
       >
         {/* Collapsed State Trigger */}
         {!isSettingsOpen && (
-          <button 
+          <button
             onClick={() => setIsSettingsOpen(true)}
-            className="w-full h-full flex items-center justify-center text-gray-700 hover:text-blue-600"
-            title="Open Settings"
+            className="w-full h-full flex items-center justify-center text-gray-400 group-hover:text-blue-400 transition-colors"
+            title="Open Control Panel"
           >
-            <Settings className="w-6 h-6" />
+            <Settings className="w-7 h-7" />
           </button>
         )}
 
         {/* Expanded State Content */}
         {isSettingsOpen && (
-          <div className="flex flex-col h-full max-h-[calc(100vh-2rem)]">
+          <div className="flex flex-col h-full max-h-[calc(100vh-3rem)]">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-white/30">
-              <div className="flex items-center gap-2">
-                <Box className="w-5 h-5 text-blue-600" />
-                <h1 className="font-bold text-gray-800">Generator</h1>
+            <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-500/20 rounded-xl">
+                  <Box className="w-5 h-5 text-blue-400" />
+                </div>
+                <div>
+                  <h1 className="font-bold text-sm tracking-tight text-white/90">Lab-01</h1>
+                  <p className="text-[10px] text-white/40 uppercase tracking-widest font-black">Shape Engine</p>
+                </div>
               </div>
-              <button 
+              <button
                 onClick={() => setIsSettingsOpen(false)}
-                className="p-1 hover:bg-white/40 rounded-full text-gray-600 transition-colors"
+                className="p-2 hover:bg-white/5 rounded-xl text-white/40 hover:text-white transition-all"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Scrollable Controls */}
-            <div className="p-5 overflow-y-auto custom-scrollbar space-y-6">
-              
+            <div className="px-6 py-6 overflow-y-auto custom-scrollbar space-y-8 pb-10">
+
+              {/* Interaction Guide */}
+              <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10 flex items-start gap-3">
+                <MousePointer2 className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+                <p className="text-xs leading-relaxed text-blue-200/60">
+                  <span className="text-blue-200 font-bold">Interactivity Active:</span> Drag to rotate, Right-click to pan, Scroll to zoom.
+                </p>
+              </div>
+
               {/* Shape Type */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Layers className="w-3 h-3" /> Shape
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Layers className="w-3 h-3" /> Geometry Base
                 </label>
-                <select 
-                  value={shapeType} 
-                  onChange={(e) => setShapeType(e.target.value as ShapeType)}
-                  className="w-full p-2 bg-white/50 border border-white/40 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm backdrop-blur-sm"
-                >
-                  <option value="sphere">Sphere</option>
-                  <option value="cylinder">Cylinder</option>
-                  <option value="cube">Cube</option>
-                  <option value="cone">Cone</option>
-                  <option value="torus">Torus</option>
-                  <option value="pyramid">Pyramid</option>
-                  <option value="prism">Triangular Prism</option>
-                  <option value="pentagonalPrism">Pentagonal Prism</option>
-                  <option value="hexagonalPrism">Hexagonal Prism</option>
-                  <option value="octagonalPrism">Octagonal Prism</option>
-                  <option value="tetrahedron">Tetrahedron</option>
-                  <option value="dodecahedron">Dodecahedron</option>
-                  <option value="icosahedron">Icosahedron</option>
-                </select>
+                <div className="relative group">
+                  <select
+                    value={shapeType}
+                    onChange={(e) => setShapeType(e.target.value as ShapeType)}
+                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white/80 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none cursor-pointer hover:bg-white/10 transition-all font-medium"
+                  >
+                    <option className="bg-neutral-900" value="sphere">Sphere</option>
+                    <option className="bg-neutral-900" value="cylinder">Cylinder</option>
+                    <option className="bg-neutral-900" value="cube">Cube</option>
+                    <option className="bg-neutral-900" value="cone">Cone</option>
+                    <option className="bg-neutral-900" value="torus">Torus</option>
+                    <option className="bg-neutral-900" value="pyramid">Pyramid</option>
+                    <option className="bg-neutral-900" value="prism">Triangular Prism</option>
+                    <option className="bg-neutral-900" value="pentagonalPrism">Pentagonal Prism</option>
+                    <option className="bg-neutral-900" value="hexagonalPrism">Hexagonal Prism</option>
+                    <option className="bg-neutral-900" value="octagonalPrism">Octagonal Prism</option>
+                    <option className="bg-neutral-900" value="tetrahedron">Tetrahedron</option>
+                    <option className="bg-neutral-900" value="dodecahedron">Dodecahedron</option>
+                    <option className="bg-neutral-900" value="icosahedron">Icosahedron</option>
+                  </select>
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/20">
+                    <Settings className="w-4 h-4 rotate-90" />
+                  </div>
+                </div>
               </div>
 
               {/* Dimensions */}
-              <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <label className="text-xs font-medium text-gray-700">Radius</label>
-                    <span className="text-xs text-gray-600">{radius}</span>
-                  </div>
-                  <input 
-                    type="range" min="0.1" max="5" step="0.1" 
-                    value={radius} onChange={(e) => setRadius(parseFloat(e.target.value))} 
-                    className="w-full h-2 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                </div>
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <label className="text-xs font-medium text-gray-700">Height</label>
-                    <span className="text-xs text-gray-600">{height}</span>
-                  </div>
-                  <input 
-                    type="range" min="0.1" max="5" step="0.1" 
-                    value={height} onChange={(e) => setHeight(parseFloat(e.target.value))} 
-                    className="w-full h-2 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                </div>
-              </div>
-
-              {/* Segments */}
-              <div className="p-3 bg-white/40 rounded-lg border border-white/30">
-                <label className="flex items-center gap-2 mb-2 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={enableSegments} 
-                    onChange={(e) => setEnableSegments(e.target.checked)} 
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Custom Segments</span>
+              <div className="space-y-6">
+                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Move className="w-3 h-3" /> Scale Module
                 </label>
-                {enableSegments && (
-                  <div className="mt-2">
-                    <div className="flex justify-between mb-1">
-                      <span className="text-xs text-gray-600">Count</span>
-                      <span className="text-xs text-gray-600">{segments}</span>
+                <div className="space-y-5">
+                  <div className="group">
+                    <div className="flex justify-between mb-3">
+                      <label className="text-xs font-semibold text-white/60">Radius Vector</label>
+                      <span className="text-xs font-mono text-blue-400">{radius.toFixed(1)}</span>
                     </div>
-                    <input 
-                      type="range" min="3" max="64" 
-                      value={segments} onChange={(e) => setSegments(parseInt(e.target.value))} 
-                      className="w-full h-1 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    <input
+                      type="range" min="0.5" max="50" step="0.5"
+                      value={radius} onChange={(e) => setRadius(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
                     />
                   </div>
-                )}
+                  <div className="group">
+                    <div className="flex justify-between mb-3">
+                      <label className="text-xs font-semibold text-white/60">Height Axis</label>
+                      <span className="text-xs font-mono text-blue-400">{height.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range" min="0.5" max="50" step="0.5"
+                      value={height} onChange={(e) => setHeight(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Appearance */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Palette className="w-3 h-3" /> Appearance
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Palette className="w-3 h-3" /> Material Skin
                 </label>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <input 
-                      type="color" 
-                      value={color} 
-                      onChange={(e) => setColor(e.target.value)} 
-                      className="h-8 w-12 p-0 border-0 rounded cursor-pointer shadow-sm"
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-12">
+                    <input
+                      type="color"
+                      value={color}
+                      onChange={(e) => setColor(e.target.value)}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     />
-                    <span className="text-xs font-mono text-gray-600 bg-white/50 px-2 py-1 rounded border border-white/30">{color}</span>
+                    <div className="w-6 h-6 rounded-full shadow-inner" style={{ backgroundColor: color }} />
+                    <span className="ml-3 text-[10px] font-mono text-white/60">{color.toUpperCase()}</span>
                   </div>
-                  
-                  <select 
-                    value={textureType} 
+
+                  <select
+                    value={textureType}
                     onChange={(e) => setTextureType(e.target.value as TextureType)}
-                    className="w-full p-2 bg-white/50 border border-white/40 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none backdrop-blur-sm"
+                    className="p-3 bg-white/5 border border-white/10 rounded-2xl text-[11px] text-white/60 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-white/10 transition-all uppercase tracking-wider font-bold"
                   >
-                    <option value="noise">Noise Texture</option>
-                    <option value="none">Solid Color</option>
-                    <option value="checkerboard">Checkerboard</option>
-                    <option value="dots">Polka Dots</option>
-                    <option value="stripes">Stripes</option>
+                    <option className="bg-neutral-900" value="noise">Noise</option>
+                    <option className="bg-neutral-900" value="none">Solid</option>
+                    <option className="bg-neutral-900" value="checkerboard">Grid</option>
+                    <option className="bg-neutral-900" value="dots">Dots</option>
+                    <option className="bg-neutral-900" value="stripes">Stripes</option>
                   </select>
                 </div>
               </div>
 
               {/* Camera & Rotation */}
-              <div className="pt-4 border-t border-white/30">
-                <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Rotate3d className="w-3 h-3" /> View & Motion
-                </label>
-                
-                <div className="space-y-4">
+              <div className="space-y-6 pt-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                    <Rotate3d className="w-3 h-3" /> Motor Sync
+                  </label>
+                  <button
+                    onClick={() => setAutoRotate(!autoRotate)}
+                    className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest transition-all ${autoRotate ? 'bg-blue-500 text-white shadow-[0_0_12px_rgba(59,130,246,0.4)]' : 'bg-white/10 text-white/40'
+                      }`}
+                  >
+                    {autoRotate ? 'Auto On' : 'Auto Off'}
+                  </button>
+                </div>
+
+                <div className="space-y-6">
                   <div>
-                    <div className="flex justify-between mb-1">
-                      <label className="text-xs font-medium text-gray-700">Distance</label>
-                      <span className="text-xs text-gray-600">{distance}</span>
+                    <div className="flex justify-between mb-3">
+                      <label className="text-xs font-semibold text-white/60">Zoom Limit</label>
+                      <span className="text-xs font-mono text-blue-400">{distance.toFixed(0)}m</span>
                     </div>
-                    <input 
-                      type="range" min="3" max="20" step="0.1" 
-                      value={distance} onChange={(e) => setDistance(parseFloat(e.target.value))} 
-                      className="w-full h-2 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                    />
-                  </div>
-                  
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <label className="text-xs font-medium text-gray-700">Speed</label>
-                      <span className="text-xs text-gray-600">{rotationSpeed}</span>
-                    </div>
-                    <input 
-                      type="range" min="0" max="0.1" step="0.001" 
-                      value={rotationSpeed} onChange={(e) => setRotationSpeed(parseFloat(e.target.value))} 
-                      className="w-full h-2 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    <input
+                      type="range" min="5" max="30" step="1"
+                      value={distance} onChange={(e) => setDistance(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
                     />
                   </div>
 
-                  <div className="bg-white/40 p-3 rounded-lg border border-white/30">
-                    <span className="text-xs font-medium text-gray-600 block mb-2">Rotation Axis</span>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold w-3 text-red-500">X</span>
-                        <input 
-                          type="range" min="-1" max="1" step="0.1" 
-                          value={rotationAxis.x} onChange={(e) => setRotationAxis(p => ({...p, x: parseFloat(e.target.value)}))} 
-                          className="flex-1 h-1 bg-white/50 rounded-lg appearance-none cursor-pointer accent-red-500"
-                        />
+                  {autoRotate && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                      <div className="flex justify-between mb-3">
+                        <label className="text-xs font-semibold text-white/60">Orbital Velocity</label>
+                        <span className="text-xs font-mono text-blue-400">{rotationSpeed.toFixed(3)}</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold w-3 text-green-500">Y</span>
-                        <input 
-                          type="range" min="-1" max="1" step="0.1" 
-                          value={rotationAxis.y} onChange={(e) => setRotationAxis(p => ({...p, y: parseFloat(e.target.value)}))} 
-                          className="flex-1 h-1 bg-white/50 rounded-lg appearance-none cursor-pointer accent-green-500"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold w-3 text-blue-500">Z</span>
-                        <input 
-                          type="range" min="-1" max="1" step="0.1" 
-                          value={rotationAxis.z} onChange={(e) => setRotationAxis(p => ({...p, z: parseFloat(e.target.value)}))} 
-                          className="flex-1 h-1 bg-white/50 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                        />
-                      </div>
+                      <input
+                        type="range" min="0" max="0.05" step="0.001"
+                        value={rotationSpeed} onChange={(e) => setRotationSpeed(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+                  )}
+
+                  <div className="bg-white/5 p-5 rounded-2xl border border-white/5 space-y-4">
+                    <span className="text-[10px] font-black text-white/20 uppercase tracking-[0.2em] block">Manual Override Axis</span>
+                    <div className="space-y-3">
+                      {[
+                        { label: 'X', color: 'bg-red-500', val: rotationAxis.x, key: 'x' },
+                        { label: 'Y', color: 'bg-green-500', val: rotationAxis.y, key: 'y' },
+                        { label: 'Z', color: 'bg-blue-500', val: rotationAxis.z, key: 'z' }
+                      ].map(axis => (
+                        <div key={axis.key} className="flex items-center gap-4">
+                          <span className={`text-[9px] font-black w-4 h-4 flex items-center justify-center rounded ${axis.color} text-black`}>{axis.label}</span>
+                          <input
+                            type="range" min="-1" max="1" step="0.1"
+                            value={axis.val} onChange={(e) => setRotationAxis(p => ({ ...p, [axis.key]: parseFloat(e.target.value) }))}
+                            className={`flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-current ${axis.color.replace('bg-', 'text-')}`}
+                          />
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -459,10 +508,23 @@ export default function App() {
         )}
       </div>
 
-      {/* Info Badge */}
-      <div className="absolute bottom-4 right-4 bg-white/30 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-gray-700 shadow-sm pointer-events-none select-none border border-white/20">
-        React + Three.js
+      {/* Experimental Tag */}
+      <div className="fixed bottom-6 right-6 flex flex-col items-end gap-2">
+        <div className="bg-white/5 backdrop-blur-xl px-4 py-2 rounded-2xl text-[10px] font-black text-white/30 tracking-[0.3em] uppercase border border-white/5">
+          V-Render Core 2.0
+        </div>
+        <div className="text-[10px] text-white/10 font-medium">
+          Interactive Environment Simulation
+        </div>
       </div>
+
+      {/* Custom Styles */}
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+      `}</style>
     </div>
   );
 }

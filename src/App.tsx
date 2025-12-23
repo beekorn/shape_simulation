@@ -10,7 +10,7 @@ type ShapeType =
   | 'pyramid' | 'prism' | 'pentagonalPrism' | 'hexagonalPrism'
   | 'octagonalPrism' | 'tetrahedron' | 'dodecahedron' | 'icosahedron';
 
-type MovementMode = 'none' | 'straight' | 'left-right' | 'up-down' | 'returning';
+type MovementMode = 'none' | 'straight' | 'left-right' | 'up-down' | 'returning' | 'orbit';
 
 type ShapeObject = {
   id: string;
@@ -332,16 +332,18 @@ export default function App() {
 
               if (dist < 0.01) {
                 mesh.position.set(ox, oy, oz);
-                // We need to update the actual state to persist this position
-                // and stop the "asymptotic" movement loop.
                 setTimeout(() => {
                   setObjects(prev => prev.map(o => o.id === obj.id ? {
-                    ...o,
-                    position: [ox, oy, oz],
-                    movementMode: 'none'
+                    ...o, position: [ox, oy, oz], movementMode: 'none'
                   } : o));
                 }, 0);
               }
+              break;
+            case 'orbit':
+              const orbitRadius = range || 5;
+              const orbitSpeed = speed * 0.5;
+              mesh.position.x = ox + Math.cos(time * orbitSpeed) * orbitRadius;
+              mesh.position.z = oz + Math.sin(time * orbitSpeed) * orbitRadius;
               break;
           }
         });
@@ -425,6 +427,7 @@ export default function App() {
         mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
+        mesh.userData = { type: obj.type, radius: obj.radius, height: obj.height };
         scene.add(mesh);
         meshesRef.current.set(obj.id, mesh);
       } else {
@@ -443,8 +446,18 @@ export default function App() {
         mat.transparent = obj.opacity < 1;
         mat.map = obj.texture !== 'none' ? textures[obj.texture] : null;
 
-        // Reset geometry if type/params changed (simplification)
-        // In a real app we'd compare geometry params
+        // Reset geometry if type/params changed
+        const currentType = mesh.userData.type;
+        const currentRadius = mesh.userData.radius;
+        const currentHeight = mesh.userData.height;
+
+        if (currentType !== obj.type || currentRadius !== obj.radius || currentHeight !== obj.height) {
+          mesh.geometry.dispose();
+          mesh.geometry = createGeometry(obj.type, obj.radius, obj.height);
+          mesh.userData.type = obj.type;
+          mesh.userData.radius = obj.radius;
+          mesh.userData.height = obj.height;
+        }
       }
     });
 
@@ -572,6 +585,63 @@ export default function App() {
     setSelectedId(newId);
   };
 
+  const createSolarSystem = () => {
+    const sunId = 'sun-' + Math.random().toString(36).substr(2, 5);
+    const sun: ShapeObject = {
+      id: sunId,
+      type: 'sphere',
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [2, 2, 2],
+      color: '#ffcc00',
+      texture: 'noise',
+      metalness: 0.1,
+      roughness: 0.1,
+      emissive: '#ff6600',
+      emissiveIntensity: 2,
+      opacity: 1,
+      radius: 4,
+      height: 4,
+      name: 'The Sun',
+      isAnimated: true,
+      movementMode: 'none',
+      movementSpeed: 0.5,
+      movementRange: 0,
+      originalPosition: [0, 0, 0]
+    };
+
+    const planets: ShapeObject[] = [
+      { name: 'Mercury', color: '#aaaaaa', radius: 0.8, dist: 8, speed: 2 },
+      { name: 'Venus', color: '#eebb99', radius: 1.5, dist: 12, speed: 1.5 },
+      { name: 'Earth', color: '#2266ff', radius: 1.6, dist: 18, speed: 1.2 },
+      { name: 'Mars', color: '#ff4422', radius: 1.2, dist: 24, speed: 1.0 },
+    ].map((p, i) => ({
+      id: 'planet-' + i + Math.random().toString(36).substr(2, 5),
+      type: 'sphere',
+      position: [p.dist, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      color: p.color,
+      texture: 'noise',
+      metalness: 0.2,
+      roughness: 0.8,
+      emissive: '#000000',
+      emissiveIntensity: 0,
+      opacity: 1,
+      radius: p.radius,
+      height: p.radius,
+      name: p.name,
+      isAnimated: true,
+      movementMode: 'orbit',
+      movementSpeed: p.speed,
+      movementRange: p.dist,
+      originalPosition: [0, 0, 0]
+    }));
+
+    setObjects([sun, ...planets]);
+    setSelectedId(sunId);
+  };
+
   const deleteObject = (id: string) => {
     if (objects.length <= 1) return; // Keep at least one
     const newObjects = objects.filter(o => o.id !== id);
@@ -686,6 +756,21 @@ export default function App() {
                 >
                   <Download className="w-4 h-4" /> Capture
                 </button>
+              </div>
+
+              {/* Presets */}
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Rotate3d className="w-3 h-3" /> Quick Presets
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={createSolarSystem}
+                    className="flex-1 flex items-center justify-center gap-2 p-3 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/20 rounded-2xl text-orange-400 text-xs font-bold transition-all"
+                  >
+                    Solar System
+                  </button>
+                </div>
               </div>
 
               {/* Environment Presets */}
@@ -925,6 +1010,7 @@ export default function App() {
                           <option className="bg-neutral-900" value="left-right">Oscillate Left-Right</option>
                           <option className="bg-neutral-900" value="up-down">Oscillate Up-Down</option>
                           <option className="bg-neutral-900" value="returning">Smooth Return</option>
+                          <option className="bg-neutral-900" value="orbit">Circular Orbit</option>
                         </select>
                       </div>
 

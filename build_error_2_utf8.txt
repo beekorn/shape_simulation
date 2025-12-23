@@ -1,5 +1,0 @@
-﻿
-> react-3d-shape-generator@0.0.0 build
-> tsc && vite build
-
-src/App.tsx(3,31): error TS2307: Cannot find module 'three/examples/jsm/controls/OrbitControls' or its corresponding type declarations.

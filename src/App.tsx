@@ -10,6 +10,8 @@ type ShapeType =
   | 'pyramid' | 'prism' | 'pentagonalPrism' | 'hexagonalPrism'
   | 'octagonalPrism' | 'tetrahedron' | 'dodecahedron' | 'icosahedron';
 
+type MovementMode = 'none' | 'straight' | 'left-right' | 'up-down' | 'returning';
+
 type ShapeObject = {
   id: string;
   type: ShapeType;
@@ -27,6 +29,10 @@ type ShapeObject = {
   height: number;
   name: string;
   isAnimated: boolean;
+  movementMode: MovementMode;
+  movementSpeed: number;
+  movementRange: number;
+  originalPosition: [number, number, number];
 };
 
 type EnvironmentPreset = 'studio' | 'midnight' | 'neon' | 'soft';
@@ -116,7 +122,11 @@ export default function App() {
       radius: 3,
       height: 3,
       name: 'Primary Torus',
-      isAnimated: false
+      isAnimated: false,
+      movementMode: 'none',
+      movementSpeed: 1,
+      movementRange: 5,
+      originalPosition: [0, 0, 0]
     }
   ]);
   const [selectedId, setSelectedId] = useState<string | null>('1');
@@ -124,6 +134,7 @@ export default function App() {
   const [autoRotate, setAutoRotate] = useState(false);
   const [rotationSpeed, setRotationSpeed] = useState(0.005);
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
+  const [showGizmo, setShowGizmo] = useState(true);
   const [environment, setEnvironment] = useState<EnvironmentPreset>('studio');
 
   // --- Refs ---
@@ -142,6 +153,7 @@ export default function App() {
   const rotationSpeedRef = useRef(rotationSpeed);
   const objectsRef = useRef(objects);
   const selectedIdRef = useRef(selectedId);
+  const showGizmoRef = useRef(showGizmo);
 
   // Sync refs with state
   useEffect(() => {
@@ -149,7 +161,8 @@ export default function App() {
     rotationSpeedRef.current = rotationSpeed;
     objectsRef.current = objects;
     selectedIdRef.current = selectedId;
-  }, [autoRotate, rotationSpeed, objects, selectedId]);
+    showGizmoRef.current = showGizmo;
+  }, [autoRotate, rotationSpeed, objects, selectedId, showGizmo]);
 
   // --- Initialization --- //
   useEffect(() => {
@@ -199,7 +212,8 @@ export default function App() {
               ...o,
               position: [obj.position.x, obj.position.y, obj.position.z],
               rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
-              scale: [obj.scale.x, obj.scale.y, obj.scale.z]
+              scale: [obj.scale.x, obj.scale.y, obj.scale.z],
+              originalPosition: [obj.position.x, obj.position.y, obj.position.z]
             };
           }
           return o;
@@ -272,14 +286,63 @@ export default function App() {
           sceneRef.current.rotation.y += rotationSpeedRef.current;
         }
 
+        const time = Date.now() * 0.001;
+
         // Per-object animation
         objectsRef.current.forEach(obj => {
+          const mesh = meshesRef.current.get(obj.id);
+          if (!mesh) return;
+
+          // Basic Rotation (Existing)
           if (obj.isAnimated) {
-            const mesh = meshesRef.current.get(obj.id);
-            if (mesh) {
-              mesh.rotation.y += 0.01;
-              mesh.position.y += Math.sin(Date.now() * 0.002) * 0.005;
-            }
+            mesh.rotation.y += 0.01;
+          }
+
+          // Movement Simulation
+          const [ox, oy, oz] = obj.originalPosition;
+          const speed = obj.movementSpeed;
+          const range = obj.movementRange;
+
+          switch (obj.movementMode) {
+            case 'straight':
+              mesh.position.z += 0.02 * speed;
+              // Loop back after some distance
+              if (Math.abs(mesh.position.z - oz) > 50) {
+                mesh.position.z = oz - 50;
+              }
+              break;
+            case 'left-right':
+              mesh.position.x = ox + Math.sin(time * speed * 2) * range;
+              break;
+            case 'up-down':
+              mesh.position.y = oy + Math.sin(time * speed * 2) * range;
+              break;
+            case 'returning':
+              const step = 0.05 * speed;
+              mesh.position.x += (ox - mesh.position.x) * step;
+              mesh.position.y += (oy - mesh.position.y) * step;
+              mesh.position.z += (oz - mesh.position.z) * step;
+
+              // Check if close enough to snap and finalize
+              const dist = Math.sqrt(
+                Math.pow(ox - mesh.position.x, 2) +
+                Math.pow(oy - mesh.position.y, 2) +
+                Math.pow(oz - mesh.position.z, 2)
+              );
+
+              if (dist < 0.01) {
+                mesh.position.set(ox, oy, oz);
+                // We need to update the actual state to persist this position
+                // and stop the "asymptotic" movement loop.
+                setTimeout(() => {
+                  setObjects(prev => prev.map(o => o.id === obj.id ? {
+                    ...o,
+                    position: [ox, oy, oz],
+                    movementMode: 'none'
+                  } : o));
+                }, 0);
+              }
+              break;
           }
         });
 
@@ -387,7 +450,7 @@ export default function App() {
 
     // Update Transform Controls selection
     if (transformRef.current) {
-      if (selectedId) {
+      if (selectedId && showGizmo) {
         const selectedMesh = meshesRef.current.get(selectedId);
         if (selectedMesh) {
           transformRef.current.attach(selectedMesh);
@@ -400,7 +463,7 @@ export default function App() {
       }
     }
 
-  }, [isInitialized, objects, selectedId, transformMode]);
+  }, [isInitialized, objects, selectedId, transformMode, showGizmo]);
 
   // --- Environment & Lighting Effect --- //
   useEffect(() => {
@@ -499,7 +562,11 @@ export default function App() {
       radius: 2,
       height: 2,
       name: `Object-${objects.length + 1}`,
-      isAnimated: false
+      isAnimated: false,
+      movementMode: 'none',
+      movementSpeed: 1,
+      movementRange: 5,
+      originalPosition: [(Math.random() - 0.5) * 10, 2, (Math.random() - 0.5) * 10]
     };
     setObjects([...objects, newObj]);
     setSelectedId(newId);
@@ -559,6 +626,17 @@ export default function App() {
             title="Open Control Panel"
           >
             <Settings className="w-7 h-7" />
+          </button>
+        )}
+
+        {/* Gizmo Toggle (Always visible when panel is closed but object is selected) */}
+        {!isSettingsOpen && selectedId && (
+          <button
+            onClick={() => setShowGizmo(!showGizmo)}
+            className={`fixed top-24 left-6 w-14 h-14 backdrop-blur-md shadow-lg rounded-full flex items-center justify-center transition-all border border-white/10 hover:scale-110 ${showGizmo ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-white/40'}`}
+            title={showGizmo ? "Hide Gizmo" : "Show Gizmo"}
+          >
+            <MousePointer2 className="w-6 h-6" />
           </button>
         )}
 
@@ -633,9 +711,17 @@ export default function App() {
 
               {/* Object List */}
               <div className="space-y-3">
-                <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
-                  <Layers className="w-3 h-3" /> Scene Hierarchy
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                    <Layers className="w-3 h-3" /> Scene Hierarchy
+                  </label>
+                  <button
+                    onClick={() => setShowGizmo(!showGizmo)}
+                    className={`text-[9px] font-bold uppercase tracking-widest px-3 py-1 rounded-lg border transition-all ${showGizmo ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-white/5 border-white/5 text-white/40'}`}
+                  >
+                    Gizmo: {showGizmo ? 'ON' : 'OFF'}
+                  </button>
+                </div>
                 <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
                   {objects.map(obj => (
                     <div
@@ -801,47 +887,113 @@ export default function App() {
                         />
                       </div>
                     </div>
+                  </div>
 
-                    {/* Emissive & Animation Toggles */}
-                    <div className="space-y-6 pt-2">
-                      <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-1.5 rounded-lg transition-colors ${selectedObject.isAnimated ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-white/20'}`}>
-                            <Rotate3d className="w-4 h-4" />
-                          </div>
-                          <span className="text-[11px] font-bold text-white/60 uppercase">Auto Dynamic</span>
-                        </div>
+                  {/* Movement Simulation */}
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                        <Move className="w-3 h-3" /> Movement Simulation
+                      </label>
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => updateSelectedObject({ isAnimated: !selectedObject.isAnimated })}
-                          className={`w-10 h-5 rounded-full relative transition-all ${selectedObject.isAnimated ? 'bg-blue-500' : 'bg-white/10'}`}
+                          onClick={() => updateSelectedObject({ originalPosition: [selectedObject.position[0], selectedObject.position[1], selectedObject.position[2]] })}
+                          className="text-[9px] font-bold text-white/30 hover:text-blue-400 transition-colors uppercase tracking-widest"
+                          title="Set current position as return target"
                         >
-                          <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selectedObject.isAnimated ? 'right-1' : 'left-1'}`} />
+                          Set Home
+                        </button>
+                        <span className="text-white/10">|</span>
+                        <button
+                          onClick={() => updateSelectedObject({ originalPosition: [0, 0, 0] })}
+                          className="text-[9px] font-bold text-white/30 hover:text-blue-400 transition-colors uppercase tracking-widest"
+                          title="Set origin [0,0,0] as return target"
+                        >
+                          To Origin
                         </button>
                       </div>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="relative group">
+                        <select
+                          value={selectedObject.movementMode}
+                          onChange={(e) => updateSelectedObject({ movementMode: e.target.value as MovementMode })}
+                          className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] text-white/60 focus:ring-1 focus:ring-blue-500/50 outline-none cursor-pointer hover:bg-white/10 transition-all uppercase tracking-wider font-bold"
+                        >
+                          <option className="bg-neutral-900" value="none">Paused / None</option>
+                          <option className="bg-neutral-900" value="straight">Straight Line</option>
+                          <option className="bg-neutral-900" value="left-right">Oscillate Left-Right</option>
+                          <option className="bg-neutral-900" value="up-down">Oscillate Up-Down</option>
+                          <option className="bg-neutral-900" value="returning">Smooth Return</option>
+                        </select>
+                      </div>
 
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
-                            <Palette className="w-3 h-3" /> Emissive Glow
-                          </label>
-                          <span className="text-[9px] font-mono text-blue-400">Intensity: {selectedObject.emissiveIntensity.toFixed(1)}</span>
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-10 w-16">
-                            <input
-                              type="color"
-                              value={selectedObject.emissive}
-                              onChange={(e) => updateSelectedObject({ emissive: e.target.value })}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            />
-                            <div className="w-4 h-4 rounded-full shadow-inner" style={{ backgroundColor: selectedObject.emissive }} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="group">
+                          <div className="flex justify-between mb-2">
+                            <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Speed Factor</label>
+                            <span className="text-xs font-mono text-blue-400">{selectedObject.movementSpeed.toFixed(1)}</span>
                           </div>
                           <input
-                            type="range" min="0" max="5" step="0.1"
-                            value={selectedObject.emissiveIntensity} onChange={(e) => updateSelectedObject({ emissiveIntensity: parseFloat(e.target.value) })}
-                            className="flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 my-auto"
+                            type="range" min="0.1" max="5" step="0.1"
+                            value={selectedObject.movementSpeed} onChange={(e) => updateSelectedObject({ movementSpeed: parseFloat(e.target.value) })}
+                            className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
                           />
                         </div>
+                        <div className="group">
+                          <div className="flex justify-between mb-2">
+                            <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Range Level</label>
+                            <span className="text-xs font-mono text-blue-400">{selectedObject.movementRange.toFixed(1)}</span>
+                          </div>
+                          <input
+                            type="range" min="0" max="25" step="0.5"
+                            value={selectedObject.movementRange} onChange={(e) => updateSelectedObject({ movementRange: parseFloat(e.target.value) })}
+                            className="w-full h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Emissive & Animation Toggles */}
+                  <div className="space-y-6 pt-2">
+                    <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-1.5 rounded-lg transition-colors ${selectedObject.isAnimated ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-white/20'}`}>
+                          <Rotate3d className="w-4 h-4" />
+                        </div>
+                        <span className="text-[11px] font-bold text-white/60 uppercase">Auto Dynamic</span>
+                      </div>
+                      <button
+                        onClick={() => updateSelectedObject({ isAnimated: !selectedObject.isAnimated })}
+                        className={`w-10 h-5 rounded-full relative transition-all ${selectedObject.isAnimated ? 'bg-blue-500' : 'bg-white/10'}`}
+                      >
+                        <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${selectedObject.isAnimated ? 'right-1' : 'left-1'}`} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] flex items-center gap-2">
+                          <Palette className="w-3 h-3" /> Emissive Glow
+                        </label>
+                        <span className="text-[9px] font-mono text-blue-400">Intensity: {selectedObject.emissiveIntensity.toFixed(1)}</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <div className="relative group p-1 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center h-10 w-16">
+                          <input
+                            type="color"
+                            value={selectedObject.emissive}
+                            onChange={(e) => updateSelectedObject({ emissive: e.target.value })}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <div className="w-4 h-4 rounded-full shadow-inner" style={{ backgroundColor: selectedObject.emissive }} />
+                        </div>
+                        <input
+                          type="range" min="0" max="5" step="0.1"
+                          value={selectedObject.emissiveIntensity} onChange={(e) => updateSelectedObject({ emissiveIntensity: parseFloat(e.target.value) })}
+                          className="flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500 my-auto"
+                        />
                       </div>
                     </div>
                   </div>
